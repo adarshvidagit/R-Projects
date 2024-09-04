@@ -1,0 +1,998 @@
+---
+title: "Bankruptcy Prediction"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+date: "2022-12-01"
+---
+Name - Yasomitra Sampat Kota (Team Lead) - ykota2
+
+Name - Adarsh Vidavaluru - adarshv2
+
+Name - Chidharth Balasubramaniam - cb43
+
+
+```{r include= FALSE}
+#Loading relevant libraries
+
+library(Hmisc)
+library(imbalance)
+library(MASS)
+library(caret)
+library(dplyr)
+library(randomForest)
+library(ROSE)
+library(ggplot2)
+library(Boruta)
+library(class)
+library(e1071)
+library(pROC)
+library(formatR)
+library(ggcorrplot)
+library(knitr)
+```
+
+```{r setup, include= FALSE, }
+set.seed(502)
+
+knitr::opts_chunk$set(echo = TRUE, 
+                      cache = TRUE,
+                      tidy=TRUE, 
+                      tidy.opts=list(width.cutoff=60),
+                      fig.width=8, 
+                      fig.height=4)
+```
+
+```{r}
+set.seed(502)
+#User Defined Functions
+
+#1. Sampling
+sample_func = function(df) {
+  sample_op <- base::sample(c(TRUE, FALSE),
+                            nrow(df),
+                            replace = TRUE,
+                            prob = c(0.7, 0.3))
+  
+  op_train <- df[sample_op, ]
+  op_test <- df[!sample_op, ]
+  
+  return(list(op_train = op_train, op_test = op_test))
+}
+
+#------------------------------------------------------------------------------#
+
+#2. PCA and selecting components based on Kaiser-Guttman rule
+pca = function(train, test, train2, test2) {
+  train_pca = prcomp(train,
+                     center = TRUE,
+                     scale. = TRUE)
+  
+  test_pca = prcomp(test,
+                    center = TRUE,
+                    scale. = TRUE)
+  
+  train_pca_eigen = train_pca$sdev ^ 2
+  train_pca_kaiser = train_pca_eigen[train_pca_eigen > 1]
+  train_pca_fin = train_pca$x[, 1:length(train_pca_kaiser)]
+  test_pca_fin = test_pca$x[, 1:length(train_pca_kaiser)]
+  
+  
+  train_pca_fin = data.frame(train_pca_fin)
+  test_pca_fin = data.frame(test_pca_fin)
+  
+  train_pca_fin$Bankrupt. = as.factor(train2$Bankrupt.)
+  test_pca_fin$Bankrupt. = as.factor(test2$Bankrupt.)
+  
+  return(list(train_pca_fin = train_pca_fin, test_pca_fin = test_pca_fin))
+}
+```
+
+# 1 Exploratory Data Analysis
+```{r}
+set.seed(502)
+#Loading data
+bankrupt = read.csv("data.csv")
+```
+
+```{r}
+set.seed(502)
+dim(bankrupt)
+```
+
+```{r}
+set.seed(502)
+#Summary of all columns
+str(bankrupt)
+```
+
+```{r}
+set.seed(502)
+#Fixing data type of few columns
+bankrupt$Bankrupt. = as.factor(bankrupt$Bankrupt.)
+bankrupt$Liability.Assets.Flag = as.factor(bankrupt$Liability.Assets.Flag)
+bankrupt$Net.Income.Flag = as.factor(bankrupt$Net.Income.Flag)
+```
+
+```{r}
+set.seed(502)
+#Plotting Histograms of all the continuous variables
+
+#Getting only the continous variables from the data
+bankrupt_cont= bankrupt[, -which(names(bankrupt) %in%
+                                  c("Bankrupt.",
+                                    "Liability.Assets.Flag",
+                                    "Net.Income.Flag"))]
+
+column_names= colnames(bankrupt_cont)
+
+par(mfrow = c(3, 3))
+
+for (i in 1:length(column_names)) {
+  
+  hist(bankrupt_cont[,i],
+       main = "",
+       xlab = column_names[i])
+  
+}
+```
+```{r}
+set.seed(502)
+#Plotting bar plots of all the categorical variables
+
+#Getting only the categorical variables from the data
+bankrupt_cat= bankrupt[, which(names(bankrupt) %in%
+                                  c("Bankrupt.",
+                                    "Liability.Assets.Flag",
+                                    "Net.Income.Flag"))]
+
+column_names= colnames(bankrupt_cat)
+
+par(mfrow = c(1, 3))
+
+for (i in 1:length(column_names)) {
+  
+  plot(bankrupt_cat[,i],
+          main = "",
+          xlab = column_names[i])
+  
+}
+```
+
+```{r}
+set.seed(502)
+#Checking if we have any continous variables with zero variance
+nearZeroVar(bankrupt_cont)
+
+```
+
+```{r}
+set.seed(502)
+#Descriptive Statistics
+summary(bankrupt_cont)
+```
+
+```{r fig.width=20, fig.height=20}
+set.seed(502)
+#Correlation plot
+
+corr <- round(cor(bankrupt_cont), 1)
+
+ggcorrplot(corr, 
+           lab = TRUE,
+           type = "lower")
+```
+
+# 2 Model Building
+```{r}
+set.seed(502)
+#Setting up the number of simulations
+sim = 100
+```
+
+## PCA + KNN + No Sampling
+```{r}
+set.seed(502)
+sample_list = sample_func(bankrupt)
+  
+  train = sample_list$op_train
+  test = sample_list$op_test
+  
+  pca_list = pca(train[, -which(names(train) %in%
+                                  c("Bankrupt.",
+                                    "Liability.Assets.Flag",
+                                    "Net.Income.Flag"))],
+                 test[, -which(names(test) %in%
+                                 c("Bankrupt.",
+                                   "Liability.Assets.Flag",
+                                   "Net.Income.Flag"))],
+                 train,
+                 test)
+  
+  cl_train = pca_list$train_pca_fin[, length(pca_list$train_pca_fin)]
+  cl_test = pca_list$test_pca_fin[, length(pca_list$test_pca_fin)]
+  
+  knn <- knn(
+    train = pca_list$train_pca_fin[,1:(length(pca_list$train_pca_fin)-1)],
+    test = pca_list$test_pca_fin[,1:(length(pca_list$train_pca_fin)-1)],
+    cl_train,
+    k = 71,
+    prob= TRUE
+  )
+  
+  accuracy <- mean(cl_test == knn)
+  
+  df= cbind(cl_test, knn)
+  
+  confusionMatrix(data= knn, reference= cl_test)
+```
+
+## PCA + Logistic Regression + Under Sampling
+```{r, warning=FALSE}
+set.seed(502)
+#Model 1
+# Feature Selection Technique: PCA
+# Type of model: Logistic Regression
+# Sampling Technique: Under
+
+accuracy_vec = c()
+sensitivities_vec= list()
+specificities_vec= list()
+auc_vec= c()
+  
+for (x in 1:sim) {
+  
+  bankrupt_under = ovun.sample(formula = Bankrupt. ~ .,
+                               data = bankrupt,
+                               method = "under", N = 550)$data
+  
+  sample_list = sample_func(bankrupt_under)
+  
+  train = sample_list$op_train
+  test = sample_list$op_test
+  
+  pca_list = pca(train[, -which(names(train) %in%
+                                  c("Bankrupt.",
+                                    "Liability.Assets.Flag",
+                                    "Net.Income.Flag"))],
+                 test[, -which(names(test) %in%
+                                 c("Bankrupt.",
+                                   "Liability.Assets.Flag",
+                                   "Net.Income.Flag"))],
+                 train,
+                 test)
+  
+  logistic = glm(Bankrupt. ~ .,
+                 data = pca_list$train_pca_fin,
+                 family = binomial,)
+  
+  predict = predict(logistic, newdata = pca_list$test_pca_fin, type = "response")
+  
+  predict_op = ifelse(predict > 0.5, 1, 0)
+  
+  accuracy = 1 - mean(predict_op != pca_list$test_pca_fin$Bankrupt.)
+  
+  accuracy_vec = append(accuracy_vec, accuracy)
+  
+  if (x == 1) {
+    roc_curve = roc(pca_list$test_pca_fin$Bankrupt, as.numeric(predict), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, col = "blue", main= "ROC Plot")
+  }
+  
+  else {
+    roc_curve = roc(pca_list$test_pca_fin$Bankrupt, as.numeric(predict), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, add = TRUE, col = "blue")
+  }
+  
+}
+
+hist(accuracy_vec, 
+     main= "Histogram of Accuracy of the model for 100 simulations", 
+     xlab= "Accuracy")
+print(paste("Mean accuracy of the model is", mean(accuracy_vec)))
+print(paste("Mean AUC of the model is", mean(auc_vec)))
+
+```
+
+## PCA + Logistic Regression + Both Sampling
+```{r, warning= FALSE}
+set.seed(502)
+#Model 2
+# Feature Selection Technique: PCA
+# Type of model: Logistic Regression
+# Sampling Technique: Both
+
+accuracy_vec = c()
+sensitivities_vec= list()
+specificities_vec= list()
+auc_vec= c()
+
+for (x in 1:sim) {
+  
+  bankrupt_both = ovun.sample(formula = Bankrupt. ~ .,
+                              data = bankrupt,
+                              method = "both")$data
+  
+  sample_list = sample_func(bankrupt_both)
+  
+  train = sample_list$op_train
+  test = sample_list$op_test
+  
+  pca_list = pca(train[, -which(names(train) %in%
+                                  c("Bankrupt.",
+                                    "Liability.Assets.Flag",
+                                    "Net.Income.Flag"))],
+                 test[, -which(names(test) %in%
+                                 c("Bankrupt.",
+                                   "Liability.Assets.Flag",
+                                   "Net.Income.Flag"))],
+                 train,
+                 test)
+  
+  logistic = glm(Bankrupt. ~ .,
+                 data = pca_list$train_pca_fin,
+                 family = binomial)
+  
+  predict = predict(logistic, newdata = pca_list$test_pca_fin, type = "response")
+  
+  predict_op = ifelse(predict > 0.5, 1, 0)
+  
+  accuracy = 1 - mean(predict_op != pca_list$test_pca_fin$Bankrupt.)
+  
+  accuracy_vec = append(accuracy_vec, accuracy)
+  
+  if (x == 1) {
+    roc_curve = roc(pca_list$test_pca_fin$Bankrupt, as.numeric(predict), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, col = "blue", main= "ROC Plot")
+  }
+  
+  else {
+    roc_curve = roc(pca_list$test_pca_fin$Bankrupt, as.numeric(predict), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, add = TRUE, col = "blue")
+  }
+  
+}
+
+hist(accuracy_vec, 
+     main= "Histogram of Accuracy of the model for 100 simulations", 
+     xlab= "Accuracy")
+print(paste("Mean accuracy of the model is", mean(accuracy_vec)))
+print(paste("Mean AUC of the model is", mean(auc_vec)))
+```
+
+## PCA + KNN + Under Sampling
+```{r}
+set.seed(502)
+#Model 3
+# Feature Selection Technique: PCA
+# Type of model: KNN
+# Sampling Technique: Both
+
+accuracy_vec = c()
+auc_vec= c()
+
+for (x in 1:sim) {
+  bankrupt_under = ovun.sample(formula = Bankrupt. ~ .,
+                              data = bankrupt,
+                              method = "under")$data
+  
+  sample_list = sample_func(bankrupt_under)
+  
+  train = sample_list$op_train
+  test = sample_list$op_test
+  
+  pca_list = pca(train[, -which(names(train) %in%
+                                  c("Bankrupt.",
+                                    "Liability.Assets.Flag",
+                                    "Net.Income.Flag"))],
+                 test[, -which(names(test) %in%
+                                 c("Bankrupt.",
+                                   "Liability.Assets.Flag",
+                                   "Net.Income.Flag"))],
+                 train,
+                 test)
+  
+  cl_train = pca_list$train_pca_fin[, length(pca_list$train_pca_fin)]
+  cl_test = pca_list$test_pca_fin[, length(pca_list$test_pca_fin)]
+  
+  knn <- knn(
+    train = pca_list$train_pca_fin[,1:(length(pca_list$train_pca_fin)-1)],
+    test = pca_list$test_pca_fin[,1:(length(pca_list$train_pca_fin)-1)],
+    cl_train,
+    k = 71,
+    prob= TRUE
+  )
+  
+  accuracy <- mean(cl_test == knn)
+  
+  accuracy_vec = append(accuracy_vec, accuracy)
+  
+  if (x == 1) {
+    roc_curve = roc(pca_list$test_pca_fin$Bankrupt,  as.numeric(attributes(knn)$prob), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, col = "blue", main= "ROC Plot")
+  }
+  
+  else {
+    roc_curve = roc(pca_list$test_pca_fin$Bankrupt,  as.numeric(attributes(knn)$prob), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, add = TRUE, col = "blue")
+  }
+  
+}
+
+hist(accuracy_vec, 
+     main= "Histogram of Accuracy of the model for 100 simulations", 
+     xlab= "Accuracy")
+print(paste("Mean accuracy of the model is", mean(accuracy_vec)))
+print(paste("Mean AUC of the model is", mean(auc_vec)))
+```
+
+## PCA + KNN + Both Sampling
+```{r}
+set.seed(502)
+#Model 4
+# Feature Selection Technique: PCA
+# Type of model: KNN
+# Sampling Technique: Both
+
+accuracy_vec = c()
+auc_vec= c()
+
+for (x in 1:sim) {
+  bankrupt_both = ovun.sample(formula = Bankrupt. ~ .,
+                              data = bankrupt,
+                              method = "both")$data
+  
+  sample_list = sample_func(bankrupt_both)
+  
+  train = sample_list$op_train
+  test = sample_list$op_test
+  
+  pca_list = pca(train[, -which(names(train) %in%
+                                  c("Bankrupt.",
+                                    "Liability.Assets.Flag",
+                                    "Net.Income.Flag"))],
+                 test[, -which(names(test) %in%
+                                 c("Bankrupt.",
+                                   "Liability.Assets.Flag",
+                                   "Net.Income.Flag"))],
+                 train,
+                 test)
+  
+  cl_train = pca_list$train_pca_fin[, length(pca_list$train_pca_fin)]
+  cl_test = pca_list$test_pca_fin[, length(pca_list$test_pca_fin)]
+  
+  knn <- knn(
+    train = pca_list$train_pca_fin[,1:(length(pca_list$train_pca_fin)-1)],
+    test = pca_list$test_pca_fin[,1:(length(pca_list$train_pca_fin)-1)],
+    cl_train,
+    k = 71,
+    prob= TRUE
+  )
+  
+  accuracy <- mean(cl_test == knn)
+  
+  accuracy_vec = append(accuracy_vec, accuracy)
+  
+  if (x == 1) {
+    roc_curve = roc(pca_list$test_pca_fin$Bankrupt,  as.numeric(attributes(knn)$prob), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, col = "blue", main= "ROC Plot")
+  }
+  
+  else {
+    roc_curve = roc(pca_list$test_pca_fin$Bankrupt,  as.numeric(attributes(knn)$prob), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, add = TRUE, col = "blue")
+  }
+  
+}
+
+hist(accuracy_vec, 
+     main= "Histogram of Accuracy of the model for 100 simulations", 
+     xlab= "Accuracy")
+print(paste("Mean accuracy of the model is", mean(accuracy_vec)))
+print(paste("Mean AUC of the model is", mean(auc_vec)))
+```
+
+## PCA + SVM + Under
+```{r}
+#Model 5
+# Feature Selection Technique: PCA
+# Type of model: SVM
+# Sampling Technique: Under
+
+accuracy_vec = c()
+sensitivities_vec= list()
+specificities_vec= list()
+auc_vec= c()
+
+for (x in 1:sim) {
+  bankrupt_under = ovun.sample(formula = Bankrupt. ~ .,
+                               data = bankrupt,
+                               method = "under")$data
+  
+  sample_list = sample_func(bankrupt_under)
+  
+  train = sample_list$op_train
+  test = sample_list$op_test
+  
+  pca_list = pca(train[, -which(names(train) %in%
+                                  c("Bankrupt.",
+                                    "Liability.Assets.Flag",
+                                    "Net.Income.Flag"))],
+                 test[, -which(names(test) %in%
+                                 c("Bankrupt.",
+                                   "Liability.Assets.Flag",
+                                   "Net.Income.Flag"))],
+                 train,
+                 test)
+  
+  trctrl <- trainControl(method = "repeatedcv",
+                         number = 5,
+                         repeats = 3)
+  
+  svm_lin <- train(Bankrupt. ~ .,
+                   data = pca_list$train_pca_fin ,
+                   method = "svmLinear2",
+                   trControl = trctrl,
+                   tuneGrid = expand.grid(cost = seq(0.01, 2, length = 20))
+                  )
+  
+  svm_model = svm(Bankrupt. ~ .,
+                  data = pca_list$train_pca_fin,
+                  cost = svm_lin$bestTune[[1]],
+                  type = "C-classification",
+                  kernel = "linear",
+                  probability = TRUE
+                  )
+  
+  svm_pred <- predict(svm_model,
+                      newdata = pca_list$test_pca_fin,
+                      probability = TRUE)
+  
+  finalmat <- data.matrix(svm_pred,
+                          rownames.force = F)
+  
+  test <- table(pred = svm_pred, 
+                true = pca_list$test_pca_fin$Bankrupt.)
+  
+  confuse= confusionMatrix(test)
+  
+  accuracy <- (sum(diag(confuse$table))) / (sum(confuse$table))
+  
+  accuracy_vec <- append(accuracy_vec, accuracy)
+  
+  if (x == 1) {
+    roc_curve = roc(pca_list$test_pca_fin$Bankrupt,  
+                    as.numeric(attributes(svm_pred)$prob[,2]), 
+                    quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, col = "blue", main= "ROC Plot")
+  }
+  
+  else {
+    roc_curve = roc(pca_list$test_pca_fin$Bankrupt,  
+                    as.numeric(attributes(svm_pred)$prob[,2]), 
+                    quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, add = TRUE, col = "blue")
+  }
+  
+}
+
+hist(accuracy_vec, 
+     main= "Histogram of Accuracy of the model for 100 simulations", 
+     xlab= "Accuracy")
+print(paste("Mean accuracy of the model is", mean(accuracy_vec)))
+print(paste("Mean AUC of the model is", mean(auc_vec)))
+```
+
+## Elastic net + Logistic Regression + Under
+```{r}
+set.seed(502)
+
+#Model 7
+# Feature Selection Technique: Elastic net
+# Type of model: Logistic Regression
+# Sampling Technique: Under
+
+accuracy_vec = c()
+sensitivities_vec= list()
+specificities_vec= list()
+auc_vec= c()
+varimp_vec= c()
+
+
+for (x in 1:sim){
+  bankrupt_under = ovun.sample(formula = Bankrupt. ~ .,
+                               data = bankrupt,
+                               method = "under")$data
+  
+  levels(bankrupt_under$Bankrupt.) <- c("non_bankrupt", "bankrupt")
+  
+  sample_list = sample_func(bankrupt_under)
+  
+  train = sample_list$op_train
+  test = sample_list$op_test
+  
+  train_scale <- as.data.frame(scale(train[, -which(names(train) %in%
+                                        c("Bankrupt.",
+                                          "Liability.Assets.Flag",
+                                          "Net.Income.Flag"))],
+                       center = TRUE,
+                       scale = TRUE))
+  
+  train_scale$Bankrupt.= as.factor(train$Bankrupt.)
+  
+  test_scale <- as.data.frame(scale(test[, -which(names(train) %in%
+                                      c("Bankrupt.",
+                                        "Liability.Assets.Flag",
+                                        "Net.Income.Flag"))],
+                      center = TRUE,
+                      scale = TRUE))
+  
+  test_scale$Bankrupt.= as.factor(test$Bankrupt.)
+  
+  trctrl <- trainControl(method = "repeatedcv",
+                         number = 5,
+                         repeats = 3,
+                         classProbs= TRUE,
+                         savePredictions = TRUE)
+  
+  enetFit <- train(Bankrupt. ~ .,
+                   data = train_scale,
+                   method = "glmnet",
+                   family= "binomial",
+                   trControl = trctrl,
+                   tuneGrid = data.frame(alpha = 0.5,
+                                         lambda = seq(0.1, 0.5, 0.05)),
+                   metric="Accuracy",
+                   response= TRUE
+                   )
+  
+  varimp= varImp(enetFit)[1]
+  
+  varimp_vec= append(varimp_vec, varimp)
+  
+  model_vec= append(model_vec, enetFit)
+  
+  class_res = predict(enetFit, newdata= test_scale, 
+                      response= TRUE, type="prob")
+  
+  predict_op = ifelse(class_res$bankrupt > 0.5, "bankrupt", "non_bankrupt")
+  
+  accuracy = 1 - mean(predict_op != test_scale$Bankrupt.)
+  
+  accuracy_vec= append(accuracy_vec, accuracy)
+  
+  if (x == 1) {
+    roc_curve = roc(test_scale$Bankrupt., as.numeric(class_res$bankrupt), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, col = "blue", main= "ROC Plot")
+    
+  }
+  else {
+    roc_curve = roc(test_scale$Bankrupt., as.numeric(class_res$bankrupt), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, add = TRUE, col = "blue")
+  }
+  
+  auc_vec = append(auc_vec,auc)
+}
+
+hist(accuracy_vec, 
+     main= "Histogram of Accuracy of the model for 100 simulations", 
+     xlab= "Accuracy")
+print(paste("Mean accuracy of the model is", mean(accuracy_vec)))
+print(paste("Mean AUC of the model is", mean(auc_vec)))
+
+df=varimp_vec[which(accuracy_vec %in%max(accuracy_vec))][1]
+
+df2= df$importance
+
+df3= cbind(new_colname= rownames(df2),df2)
+
+df4= df3[order(df3$Overall, decreasing = TRUE), ]
+
+print(df4[1:10,], quote = TRUE)
+```
+
+## Lasso + Logistic Regression + Under
+```{r, warning= FLASE}
+set.seed(502)
+
+#Model 9
+# Feature Selection Technique: Elastic net
+# Type of model: Logistic Regression
+# Sampling Technique: Under
+
+accuracy_vec = c()
+sensitivities_vec= list()
+specificities_vec= list()
+auc_vec= c()
+
+
+for (x in 1:sim){
+  bankrupt_under = ovun.sample(formula = Bankrupt. ~ .,
+                               data = bankrupt,
+                               method = "under")$data
+  
+  levels(bankrupt_under$Bankrupt.) <- c("non_bankrupt", "bankrupt")
+  
+  sample_list = sample_func(bankrupt_under)
+  
+  train = sample_list$op_train
+  test = sample_list$op_test
+  
+  train_scale <- as.data.frame(scale(train[, -which(names(train) %in%
+                                        c("Bankrupt.",
+                                          "Liability.Assets.Flag",
+                                          "Net.Income.Flag"))],
+                       center = TRUE,
+                       scale = TRUE))
+  
+  train_scale$Bankrupt.= as.factor(train$Bankrupt.)
+  
+  test_scale <- as.data.frame(scale(test[, -which(names(train) %in%
+                                      c("Bankrupt.",
+                                        "Liability.Assets.Flag",
+                                        "Net.Income.Flag"))],
+                      center = TRUE,
+                      scale = TRUE))
+  
+  test_scale$Bankrupt.= as.factor(test$Bankrupt.)
+  
+  trctrl <- trainControl(method = "repeatedcv",
+                         number = 5,
+                         repeats = 3,
+                         classProbs= TRUE,
+                         savePredictions = TRUE)
+  
+  enetFit <- train(Bankrupt. ~ .,
+                   data = train_scale,
+                   method = "glmnet",
+                   family= "binomial",
+                   trControl = trctrl,
+                   tuneGrid = data.frame(alpha = 1,
+                                         lambda = seq(0.1, 0.5, 0.05)),
+                   metric="Accuracy",
+                   response= TRUE
+                   )
+  
+  class_res = predict(enetFit, newdata= test_scale, 
+                      response= TRUE, type="prob")
+  
+  predict_op = ifelse(class_res$bankrupt > 0.5, "bankrupt", "non_bankrupt")
+  
+  accuracy = 1 - mean(predict_op != test_scale$Bankrupt.)
+  
+  accuracy_vec= append(accuracy_vec, accuracy)
+  
+  if (x == 1) {
+    roc_curve = roc(test_scale$Bankrupt., as.numeric(class_res$bankrupt), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, col = "blue", main= "ROC Plot")
+    
+  }
+  else {
+    roc_curve = roc(test_scale$Bankrupt., as.numeric(class_res$bankrupt), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, add = TRUE, col = "blue")
+  }
+  
+  auc_vec = append(auc_vec,auc)
+}
+
+hist(accuracy_vec, 
+     main= "Histogram of Accuracy of the model for 100 simulations", 
+     xlab= "Accuracy")
+print(paste("Mean accuracy of the model is", mean(accuracy_vec)))
+print(paste("Mean AUC of the model is", mean(auc_vec)))
+
+
+```
+
+## Ridge + Logistic Regression + Under Sampling
+```{r}
+set.seed(502)
+
+#Model 10
+# Feature Selection Technique: Elastic net
+# Type of model: Logistic Regression
+# Sampling Technique: Under
+
+accuracy_vec = c()
+sensitivities_vec= list()
+specificities_vec= list()
+auc_vec= c()
+varimp_vec= c()
+
+for (x in 1:sim){
+  bankrupt_under = ovun.sample(formula = Bankrupt. ~ .,
+                               data = bankrupt,
+                               method = "under")$data
+  
+  levels(bankrupt_under$Bankrupt.) <- c("non_bankrupt", "bankrupt")
+  
+  sample_list = sample_func(bankrupt_under)
+  
+  train = sample_list$op_train
+  test = sample_list$op_test
+  
+  train_scale <- as.data.frame(scale(train[, -which(names(train) %in%
+                                        c("Bankrupt.",
+                                          "Liability.Assets.Flag",
+                                          "Net.Income.Flag"))],
+                       center = TRUE,
+                       scale = TRUE))
+  
+  train_scale$Bankrupt.= as.factor(train$Bankrupt.)
+  
+  test_scale <- as.data.frame(scale(test[, -which(names(train) %in%
+                                      c("Bankrupt.",
+                                        "Liability.Assets.Flag",
+                                        "Net.Income.Flag"))],
+                      center = TRUE,
+                      scale = TRUE))
+  
+  test_scale$Bankrupt.= as.factor(test$Bankrupt.)
+  
+  trctrl <- trainControl(method = "repeatedcv",
+                         number = 5,
+                         repeats = 3,
+                         classProbs= TRUE,
+                         savePredictions = TRUE)
+  
+  enetFit <- train(Bankrupt. ~ .,
+                   data = train_scale,
+                   method = "glmnet",
+                   family= "binomial",
+                   trControl = trctrl,
+                   tuneGrid = data.frame(alpha = 0,
+                                         lambda = seq(0.1, 0.5, 0.05)),
+                   metric="Accuracy",
+                   response= TRUE
+                   )
+  
+  varimp= varImp(enetFit)[1]
+  
+  varimp_vec= append(varimp_vec, varimp)
+  
+  class_res = predict(enetFit, newdata= test_scale, 
+                      response= TRUE, type="prob")
+  
+  predict_op = ifelse(class_res$bankrupt > 0.5, "bankrupt", "non_bankrupt")
+  
+  accuracy = 1 - mean(predict_op != test_scale$Bankrupt.)
+  
+  accuracy_vec= append(accuracy_vec, accuracy)
+  
+  if (x == 1) {
+    roc_curve = roc(test_scale$Bankrupt., as.numeric(class_res$bankrupt), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, col = "blue", main= "ROC Plot")
+    
+  }
+  else {
+    roc_curve = roc(test_scale$Bankrupt., as.numeric(class_res$bankrupt), quiet= TRUE)
+    auc = auc(roc_curve)
+    auc_vec= append(auc_vec, auc)
+    plot(roc_curve, print.auc = F, legacy.axes = TRUE, add = TRUE, col = "blue")
+  }
+  
+  auc_vec = append(auc_vec,auc)
+}
+
+hist(accuracy_vec, 
+     main= "Histogram of Accuracy of the model for 100 simulations", 
+     xlab= "Accuracy")
+print(paste("Mean accuracy of the model is", mean(accuracy_vec)))
+print(paste("Mean AUC of the model is", mean(auc_vec)))
+
+df=varimp_vec[which(accuracy_vec %in%max(accuracy_vec))][1]
+
+df2= df$importance
+
+df3= cbind(new_colname= rownames(df2),df2)
+
+df4= df3[order(df3$Overall, decreasing = TRUE), ]
+
+print(df4[1:2,], quote = TRUE)
+```
+
+## RFE + Random Forests + Under Sampling
+```{r}
+set.seed(502)
+
+#Model 11
+# Feature Selection Technique: RFE
+# Type of model: Random Forests
+# Sampling Technique: Under
+
+accuracy_vec = c()
+sensitivities_vec= list()
+specificities_vec= list()
+auc_vec= c()
+
+rand_acc= c()
+
+for (x in 1:100){
+  bankrupt_under = ovun.sample(formula = Bankrupt. ~ .,
+                               data = bankrupt,
+                               method = "under")$data
+  
+  sample_list = sample_func(bankrupt_under)
+  
+  train = sample_list$op_train
+  test = sample_list$op_test
+  
+  train_scale <- as.data.frame(scale(train[, -which(names(train) %in%
+                                                      c("Bankrupt.",
+                                                        "Liability.Assets.Flag",
+                                                        "Net.Income.Flag"))],
+                                     center = TRUE,
+                                     scale = TRUE))
+  
+  train_scale$Bankrupt.= as.factor(train$Bankrupt.)
+  
+  test_scale <- as.data.frame(scale(test[, -which(names(train) %in%
+                                                    c("Bankrupt.",
+                                                      "Liability.Assets.Flag",
+                                                      "Net.Income.Flag"))],
+                                    center = TRUE,
+                                    scale = TRUE))
+  
+  test_scale$Bankrupt.= as.factor(test$Bankrupt.)
+  
+  control <- rfeControl(functions = rfFuncs, 
+                        method = "cv", 
+                        number = 5)
+  
+  
+  result_rfe <- rfe(x = train_scale[,-which(names(train_scale) %in%
+                                               c("Bankrupt.",
+                                                 "Liability.Assets.Flag",
+                                                 "Net.Income.Flag"))], 
+                     y = train_scale[,which(names(train_scale) %in%
+                                               c("Bankrupt."))], 
+                     sizes = c(1:10),
+                     rfeControl = control
+  )
+  
+  pred= predict(result_rfe, newdata= test_scale)
+  
+  acc= sum(diag(table(pred$pred, test_scale$Bankrupt.)))/sum(table(pred$pred, 
+                                                                  test_scale$Bankrupt.))
+  
+  accuracy_vec = append(accuracy_vec, acc)
+  
+}
+
+hist(accuracy_vec, 
+     main= "Histogram of Accuracy of the model for 100 simulations", 
+     xlab= "Accuracy")
+print(paste("Mean accuracy of the model is", mean(accuracy_vec)))
+
+```
