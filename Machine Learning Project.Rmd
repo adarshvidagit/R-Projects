@@ -6,12 +6,6 @@ output:
     df_print: paged
 date: "2022-12-01"
 ---
-Name - Yasomitra Sampat Kota (Team Lead) - ykota2
-
-Name - Adarsh Vidavaluru - adarshv2
-
-Name - Chidharth Balasubramaniam - cb43
-
 
 ```{r include= FALSE}
 #Loading relevant libraries
