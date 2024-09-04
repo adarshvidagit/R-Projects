@@ -1,2 +1,2 @@
 # R-Projects
-A Supervised Machine Learning Academic Project
+A Machine Learning project and a Time Series Analysis project
